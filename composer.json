@@ -1,0 +1,16 @@
+{
+  "name": "bloke/smd_tabber",
+  "description": "Add and manage Textpattern back-end tabs (for dashboards, etc)",
+  "keywords": ["textpattern", "plugin", "tabs", "manager", "dashboard", "custom", "admin-side", "back-end"],
+  "homepage": "https://github.com/bloke/smd_tabber",
+  "license": "GPL-2.0",
+  "type": "textpattern-plugin",
+  "support": {
+    "issues": "https://github.com/bloke/smd_tabber/issues",
+    "source": "https://github.com/bloke/smd_tabber"
+  },
+  "require": {
+    "textpattern/lock": ">=4.4.0",
+    "textpattern/installer": "*"
+  }
+}

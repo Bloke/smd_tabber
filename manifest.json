@@ -1,0 +1,11 @@
+{
+  "name": "smd_tabber",
+  "description": "Add and manage Textpattern back-end tabs (for dashboards, etc)",
+  "version": "0.2.0",
+  "type": 5,
+  "author": "Stef Dawson",
+  "author_uri": "https://stefdawson.com/",
+  "order": 5,
+  "flags": 2,
+  "help": {"file" : ["./README.textile"]}
+}
