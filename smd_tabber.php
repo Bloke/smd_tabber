@@ -754,13 +754,19 @@ class smd_tabber
     }
 
     /**
-     * Drop table if in database and tidy up
-     *
-     * @todo remove plugin textpack strings
+     * Drop table if in database and tidy up prefs and language strings
      */
     public function uninstall()
     {
         safe_drop('smd_tabber');
+        safe_delete(
+            'txp_prefs',
+            "name like 'smd\_tabber%'"
+        );
+        safe_delete(
+            'txp_lang',
+            "name like 'smd\_tabber%'"
+        );
     }
 
     /**
