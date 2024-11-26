@@ -106,22 +106,10 @@ if (class_exists('\Textpattern\Tag\Registry')) {
 }
 
 if (txpinterface === 'admin') {
-    global $textarray, $smd_tabber_event, $smd_tabber_styles, $txp_user, $smd_tabber_callstack, $smd_tabber_uprivs, $smd_tabber_prevs;
+    global $textarray, $smd_tabber_event, $txp_user, $smd_tabber_callstack, $smd_tabber_uprivs, $smd_tabber_prevs;
 
     $smd_tabber_event = 'smd_tabber';
     $smd_tabber_prevs = '1';
-    $smd_tabber_styles = array(
-        'edit' => '#smd_tabber_wrapper { margin:0 auto; width:520px; }
-.smd_tabber_equal { display:table; border-collapse:separate; margin:10px auto; border-spacing:8px; }
-.smd_tabber_row { display:table-row; }
-.smd_tabber_row div { display:table-cell; }
-.smd_tabber_row .smd_tabber_label { width:150px; text-align:right; padding:2px 0 0 0; }
-.smd_tabber_row .smd_tabber_value { width:350px; vertical-align:middle; }
-#smd_tabber_select { margin-bottom:-20px; }
-.smd_tabber_save { float:right; margin:10px 50px 0 0!important;}',
-        'prefs' => '.smd_label { text-align: right!important; vertical-align: top; }
-        ',
-    );
 
     register_callback('smd_tabber_welcome', 'plugin_lifecycle.'.$smd_tabber_event);
 
@@ -163,7 +151,8 @@ if (txpinterface === 'admin') {
                 if ($create_top) {
                     add_privs($area_privname, $smd_tabber_uprivs);
                     $smd_areas[] = $areaname;
-                    if ($areaname != 'start') {
+
+                    if ($areaname !== 'start') {
                         $textarray['tab_'.$areaname] = $area;
                     }
                 }
@@ -189,12 +178,14 @@ function smd_tabber_render_tab($evt, $stp) {
     pagetop($tab_info['name']);
 
     $html = safe_field('user_html', 'txp_page', "name='".doSlash($tab_info['page'])."'");
+
     if (!$html) {
         $html = '<txp:smd_tabber_edit_page />'.n.'<txp:smd_tabber_edit_style />';
     }
 
     // Hand over control to the Page code
     include_once txpath.'/publish.php';
+
     for ($idx = 0; $idx < $parse_depth; $idx++) {
         $html = parse($html);
     }
@@ -258,11 +249,37 @@ function smd_tabber_css_link() {
     }
 }
 
+    /**
+     * Fetch plugin style rules
+     *
+     * @return array
+     */
+    function smd_tabber_get_styles()
+    {
+        $styles = array(
+            'edit' => '#smd_tabber_wrapper { margin:0 auto; width:520px; }
+.smd_tabber_equal { display:table; border-collapse:separate; margin:10px auto; border-spacing:8px; }
+.smd_tabber_row { display:table-row; }
+.smd_tabber_row div { display:table-cell; }
+.smd_tabber_row .smd_tabber_label { width:150px; text-align:right; padding:2px 0 0 0; }
+.smd_tabber_row .smd_tabber_value { width:350px; vertical-align:middle; }
+#smd_tabber_select { margin-bottom:-20px; }
+.smd_tabber_save { float:right; margin:10px 50px 0 0!important;}',
+        'prefs' => '.smd_label { text-align: right!important; vertical-align: top; }
+        ',
+        );
+
+        return $styles;
+    }
+
 // ------------------------
-function smd_tabber($msg='') {
-    global $smd_tabber_event, $smd_tabber_uprivs, $smd_tabber_prevs, $smd_tabber_styles;
+function smd_tabber($msg = '') {
+    global $smd_tabber_event, $smd_tabber_uprivs, $smd_tabber_prevs;
 
     pagetop(gTxt('smd_tabber_tab'), $msg);
+
+    $smd_tabber_styles = smd_tabber_get_styles();
+
     $pref_rights = in_array($smd_tabber_prevs, explode(',', $smd_tabber_uprivs));
 
     if (smd_tabber_table_exist(1)) {
@@ -363,8 +380,14 @@ function smd_tabber($msg='') {
 
         $pref_link = $pref_rights ? sp . eLink($smd_tabber_event, 'smd_tabber_prefs', '', '', '['.gTxt('smd_tabber_prefs').']') : '';
 
+        if (class_exists('\Textpattern\UI\Style')) {
+            $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['edit']);
+        } else {
+            $css = '<style>' . $smd_tabber_styles['edit'] . '</style>';
+        }
+
         // Edit form
-        echo '<style type="text/css">' . $smd_tabber_styles['edit'] . '</style>';
+        echo $css;
         echo '<div id="smd_tabber_wrapper">';
         echo hed(gTxt('smd_tabber_heading'), 2);
         echo '<div class="smd_tabber_preflink">' . $pref_link . '</div>';
@@ -508,9 +531,11 @@ function smd_tabber_delete() {
 
 // ------------------------
 function smd_tabber_prefs($msg='') {
-    global $smd_tabber_event, $smd_tabber_styles;
+    global $smd_tabber_event;
 
     pagetop(gTxt('smd_tabber_prefs_lbl'), $msg);
+
+    $smd_tabber_styles = smd_tabber_get_styles();
 
     $users = safe_rows('*', 'txp_users', '1=1 ORDER BY RealName');
     $privs = array('' => gTxt('smd_tabber_all_pubs'));
@@ -523,7 +548,13 @@ function smd_tabber_prefs($msg='') {
     $parse_depth = get_pref('smd_tabber_parse_depth', '1');
     $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_');
 
-    echo '<style type="text/css">' . $smd_tabber_styles['prefs'] . '</style>';
+    if (class_exists('\Textpattern\UI\Style')) {
+        $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['prefs']);
+    } else {
+        $css = '<style>' . $smd_tabber_styles['prefs'] . '</style>';
+    }
+
+    echo $css;
     echo '<form action="index.php" method="post" name="smd_tabber_prefs_form">';
     echo startTable('list');
     echo tr(tda(hed(gTxt('smd_tabber_prefs_lbl'), 2), ' colspan="3"'));
