@@ -99,6 +99,11 @@ if (!defined('SMD_TABBER')) {
     define("SMD_TABBER", 'smd_tabber');
 }
 
+/**
+ * Used by both admin and public sides, so it needs to be global
+ */
+global $smd_tabber_callstack;
+
 if (class_exists('\Textpattern\Tag\Registry')) {
     Txp::get('\Textpattern\Tag\Registry')
         ->register('smd_tabber_edit_page')
@@ -106,147 +111,247 @@ if (class_exists('\Textpattern\Tag\Registry')) {
 }
 
 if (txpinterface === 'admin') {
-    global $textarray, $smd_tabber_event, $txp_user, $smd_tabber_callstack, $smd_tabber_uprivs, $smd_tabber_prevs;
+    new smd_tabber();
+}
 
-    $smd_tabber_event = 'smd_tabber';
-    $smd_tabber_prevs = '1';
+/**
+ * Tab management admin interface
+ */
+class smd_tabber
+{
+    /**
+     * The plugin's event as registered in Txp.
+     *
+     * @var string
+     */
+    protected $event = 'smd_tabber';
 
-    register_callback('smd_tabber_welcome', 'plugin_lifecycle.'.$smd_tabber_event);
+    /**
+     * The plugin's version.
+     *
+     * @var string
+     */
+    protected $version = '0.2.0';
 
-    $ulist = get_pref('smd_tabber_tab_privs', '');
-    $allowed = ($ulist) ? explode(',', $ulist) : array();
-    $levs = ($allowed) ? '1,2,3,4,5,6' : '1';
+    /**
+     * The plugin's privileges.
+     *
+     * @var string
+     */
+    protected $privs = '1';
 
-    if (empty($allowed) || in_array($txp_user, $allowed)) {
-        add_privs($smd_tabber_event, $levs);
-    }
+    /**
+     * The user's privileges.
+     *
+     * @var string
+     */
+    protected $uprivs = '';
 
-    // Grab this here so that the privs are known immediately after manual install
-    $smd_tabber_uprivs = safe_field('privs', 'txp_users', "name = '".doSlash($txp_user)."'");
+    /**
+     * Any UI message to announce.
+     *
+     * @var string
+     */
+    protected $message = '';
 
-    register_tab('admin', $smd_tabber_event, gTxt('smd_tabber_tab'));
-    register_callback('smd_tabber_dispatch', $smd_tabber_event);
+    /**
+     * Constructor to set up callbacks and environment.
+     */
+    public function __construct()
+    {
+        global $textarray, $txp_user, $txp_groups, $smd_tabber_callstack;
 
-    // Do the tabbing deed
-    if (smd_tabber_table_exist(1)) {
-        register_callback('smd_tabber_css_link', 'admin_side', 'head_end');
-        $smd_tabs = safe_rows('*', SMD_TABBER, '1=1 ORDER BY area, sort_order, name');
+        add_privs($this->event, $this->privs);
+        register_callback(array($this, 'welcome'), 'plugin_lifecycle.'.$this->event);
 
-        // Yuk but no other way to get these.
-        // NB: 'start' missing on purpose as it has no privs by default, so needs them adding
-         $smd_areas = array('content', 'presentation', 'admin', 'extensions');
+        // Play nicely with plugins that manipulate the priv levels
+        // (but remove None privileges).
+        $privset = $txp_groups;
+        unset($privset[0]);
+        $privlist = implode(',', array_keys($privset));
 
-        foreach ($smd_tabs as $idx => $tab) {
-            $name = $tab['name'];
-            $area = $tab['area'];
-            $areaname = strtolower(sanitizeForUrl($area));
-            $area_privname = 'tab.' . $areaname;
-            $create_top = (!in_array($areaname, $smd_areas));
-            $tabname = strtolower(sanitizeForUrl($name));
+        // List of usernames who can manage tabs (from plugin prefs).
+        $tab_privs = get_pref('smd_tabber_tab_privs', '');
+        $allowed = ($tab_privs) ? explode(',', $tab_privs) : array();
+        $levs = ($allowed) ? $privlist : '1';
 
-            $eprivs = explode(',', $tab['view_privs']);
-            $rights = in_array($smd_tabber_uprivs, $eprivs);
+        if (empty($allowed) || in_array($txp_user, $allowed)) {
+            add_privs($this->event, $levs);
+        }
 
-            if ($rights) {
-                if ($create_top) {
-                    add_privs($area_privname, $smd_tabber_uprivs);
-                    $smd_areas[] = $areaname;
+        // Grab this here so that the privs are known immediately after manual install.
+        $this->uprivs = safe_field('privs', 'txp_users', "name = '".doSlash($txp_user)."'");
 
-                    if ($areaname !== 'start') {
-                        $textarray['tab_'.$areaname] = $area;
+        register_tab('admin', $this->event, gTxt('smd_tabber_tab'));
+        register_callback(array($this, 'dispatcher'), $this->event);
+
+        // Call the installer in case the lifecycle event didn't fire.
+        $this->install();
+
+        // Do the tabbing deed.
+        if ($this->table_exist(1)) {
+            register_callback(array($this, 'css_link'), 'admin_side', 'head_end');
+            $smd_tabs = safe_rows('*', SMD_TABBER, '1=1 ORDER BY area, sort_order, name');
+
+            // Yuk but no other way to get these.
+            // NB: 'start' missing on purpose as it has no privs by default, so needs them adding
+            $smd_areas = array('content', 'presentation', 'admin', 'extensions');
+
+            foreach ($smd_tabs as $idx => $tab) {
+                $name = $tab['name'];
+                $area = $tab['area'];
+                $areaname = strtolower(sanitizeForUrl($area));
+                $area_privname = 'tab.' . $areaname;
+                $create_top = (!in_array($areaname, $smd_areas));
+                $tabname = strtolower(sanitizeForUrl($name));
+
+                $eprivs = explode(',', $tab['view_privs']);
+                $rights = in_array($this->uprivs, $eprivs);
+
+                if ($rights) {
+                    if ($create_top) {
+                        add_privs($area_privname, $this->uprivs);
+                        $smd_areas[] = $areaname;
+
+                        if ($areaname !== 'start') {
+                            $textarray['tab_'.$areaname] = $area;
+                        }
                     }
-                }
 
-                add_privs($tabname, $smd_tabber_uprivs);
-                register_tab($areaname, $tabname, $name);
-                register_callback('smd_tabber_render_tab', $tabname);
-                $smd_tabber_callstack[$tabname] = array('name' => $name, 'page' => $tab['page'], 'style' => $tab['style']);
+                    add_privs($tabname, $this->uprivs);
+                    register_tab($areaname, $tabname, $name);
+                    register_callback(array($this, 'tab_content'), $tabname);
+
+                    // Keep track of the tabs that have been registered.
+                    $smd_tabber_callstack[$tabname] = array(
+                        'name' => $name,
+                        'page' => $tab['page'],
+                        'style' => $tab['style'],
+                    );
+                }
             }
         }
     }
-}
 
-// ------------------------
-function smd_tabber_render_tab($evt, $stp) {
-    global $smd_tabber_callstack, $pretext;
+    /**
+     * Render the tab's content
+     *
+     * @param  string $evt Textpattern event
+     * @param  string $stp Textpattern step
+     * @return string      HTML
+     */
+    public function tab_content($evt, $stp)
+    {
+        global $smd_tabber_callstack, $pretext;
 
-    $tab_info = $smd_tabber_callstack[$evt];
+        $tab_info = $smd_tabber_callstack[$evt];
 
-    // Allow multiple parse calls for any nested {replaced} content
-    $parse_depth = intval(get_pref('smd_tabber_parse_depth', 1));
+        // Allow multiple parse calls for any nested {replaced} content
+        $parse_depth = intval(get_pref('smd_tabber_parse_depth', 1));
 
-    pagetop($tab_info['name']);
+        pagetop($tab_info['name']);
 
-    $html = safe_field('user_html', 'txp_page', "name='".doSlash($tab_info['page'])."'");
+        $html = safe_field('user_html', 'txp_page', "name='".doSlash($tab_info['page'])."'");
 
-    if (!$html) {
-        $html = '<txp:smd_tabber_edit_page />'.n.'<txp:smd_tabber_edit_style />';
+        if (!$html) {
+            $html = '<txp:smd_tabber_edit_page />'.n.'<txp:smd_tabber_edit_style />';
+        }
+
+        // Hand over control to the Page code
+        include_once txpath.'/publish.php';
+
+        for ($idx = 0; $idx < $parse_depth; $idx++) {
+            $html = parse($html);
+        }
+
+        echo $html;
     }
 
-    // Hand over control to the Page code
-    include_once txpath.'/publish.php';
+    /**
+     * Event/step routing
+     *
+     * @param  string $evt Textpattern event
+     * @param  string $stp Textpattern step
+     */
+    public function dispatcher($evt, $stp)
+    {
+        $available_steps = array(
+            'tabber_ui'    => false,
+            'install'      => false,
+            'uninstall'    => false,
+            'tab_css'      => false,
+            'prefs_ui'     => true,
+            'tab_prefsave' => true,
+            'tabsave'      => true,
+            'tabdelete'    => true,
+        );
 
-    for ($idx = 0; $idx < $parse_depth; $idx++) {
-        $html = parse($html);
+        if (!$stp or !bouncer($stp, $available_steps)) {
+            $stp = 'tabber_ui';
+        }
+
+        $this->$stp();
     }
 
-    echo $html;
-}
+    /**
+     * Lifecycle bootstrap
+     *
+     * @param  string $evt Textpattern event
+     * @param  string $stp Textpattern step
+     * @return string      Announcement message
+     */
+    public function welcome($evt, $stp)
+    {
+        $msg = '';
 
-// ------------------------
-function smd_tabber_dispatch($evt, $stp) {
-    if(!$stp or !in_array($stp, array(
-            'smd_tabber_table_install',
-            'smd_tabber_table_remove',
-            'smd_tabber_css',
-            'smd_tabber_prefs',
-            'smd_tabber_prefsave',
-            'smd_tabber_save',
-            'smd_tabber_delete',
-        ))) {
-        smd_tabber('');
-    } else $stp();
-}
+        switch ($stp) {
+            case 'installed':
+                $this->install();
+                $msg = 'Supertabs are go!';
+                break;
+            case 'deleted':
+                $this->uninstall();
+                break;
+        }
 
-// ------------------------
-function smd_tabber_welcome($evt, $stp) {
-    $msg = '';
-    switch ($stp) {
-        case 'installed':
-            smd_tabber_table_install();
-            $msg = 'Supertabs are go!';
-            break;
-        case 'deleted':
-            smd_tabber_table_remove();
-            break;
+        return $msg;
     }
-    return $msg;
-}
 
-// ------------------------
-function smd_tabber_css() {
-    global $event;
-    $name = doSlash(gps('name'));
-    $css = safe_field('css', 'txp_css', "name='$name'");
-    unset($name);
+    /**
+     * Output the actual CSS stylesheet given by the URL param 'n'
+     *
+     * @return Stylesheet
+     */
+    protected function tab_css()
+    {
+        global $event;
 
-    if ($css) {
-        header('Content-type: text/css');
-        echo $css;
-        exit();
+        $name = doSlash(gps('name'));
+        $css = safe_field('css', 'txp_css', "name='$name'");
+        unset($name);
+
+        if ($css) {
+            header('Content-type: text/css');
+            echo $css;
+            exit();
+        }
     }
-}
 
-// ------------------------
-function smd_tabber_css_link() {
-    global $event, $smd_tabber_event;
+    /**
+     * Renders a &lt;link&gt; tag to the tab's stylesheet (if it's defined)
+     *
+     * @return HTML
+     */
+    public function css_link()
+    {
+        global $event;
 
-    // Annoyingly, we need an extra test here in case the plugin has been deleted.
-    // This callback is registered before plugin deletion but by the time it runs the table is gone
-    if (smd_tabber_table_exist(1)) {
-        $smd_tab = safe_field('style', SMD_TABBER, "name = '".doSlash($event)."'");
-        echo ($smd_tab) ? n.'<link href="?event='.$smd_tabber_event.a.'step=smd_tabber_css'.a.'name='.$smd_tab.'" rel="stylesheet" type="text/css" />'.n : '';
-    }
+        // Annoyingly, we need an extra test here in case the plugin has been deleted.
+        // This callback is registered before plugin deletion but by the time it runs, the table is gone.
+        if ($this->table_exist(1)) {
+            $smd_tab = safe_field('style', SMD_TABBER, "name = '".doSlash($event)."'");
+            echo ($smd_tab) ? n.'<link href="?event='.$this->event.a.'step=tab_css'.a.'name='.$smd_tab.'" rel="stylesheet" type="text/css" />'.n : '';
+        }
 }
 
     /**
@@ -254,7 +359,7 @@ function smd_tabber_css_link() {
      *
      * @return array
      */
-    function smd_tabber_get_styles()
+    protected function get_styles()
     {
         $styles = array(
             'edit' => '#smd_tabber_wrapper { margin:0 auto; width:520px; }
@@ -272,384 +377,426 @@ function smd_tabber_css_link() {
         return $styles;
     }
 
-// ------------------------
-function smd_tabber($msg = '') {
-    global $smd_tabber_event, $smd_tabber_uprivs, $smd_tabber_prevs;
+    /**
+     * Render the tab management interface
+     *
+     * @return string  HTML
+     */
+    public function tabber_ui()
+    {
+        pagetop(gTxt('smd_tabber_tab'), $this->message);
 
-    pagetop(gTxt('smd_tabber_tab'), $msg);
+        $smd_tabber_styles = $this->get_styles();
 
-    $smd_tabber_styles = smd_tabber_get_styles();
+        $pref_rights = in_array($this->privs, explode(',', $this->uprivs));
 
-    $pref_rights = in_array($smd_tabber_prevs, explode(',', $smd_tabber_uprivs));
+        if ($this->table_exist(1)) {
+            $tab_name = $tab_new_name = gps('smd_tabber_name');
+            $area = $curr_page = $curr_style = $sort_order = '';
+            $view_privs = array();
+            $tablist = $smd_areas = array();
+            $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_', 1);
 
-    if (smd_tabber_table_exist(1)) {
-        $tab_name = $tab_new_name = gps('smd_tabber_name');
-        $area = $curr_page = $curr_style = $sort_order = '';
-        $view_privs = array();
-        $tablist = $smd_areas = array();
-        $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_', 1);
+            // Can't use the smd_tabs and smd_areas lists in the global scope 'cos they're stale / strtolower()ed
+            $smd_tabs = safe_rows('*', SMD_TABBER, '1=1 ORDER BY area, sort_order, name');
 
-        // Can't use the smd_tabs and smd_areas lists in the global scope 'cos they're stale / strtolower()ed
-        $smd_tabs = safe_rows('*', SMD_TABBER, '1=1 ORDER BY area, sort_order, name');
+            if ($smd_tabs) {
+                foreach ($smd_tabs as $idx => $tab) {
+                    $tablist[$tab['area']][$tab['name']] = $tab['name'];
+                    $smd_areas[$tab['area']] = strtolower(sanitizeForUrl($tab['area']));
 
-        if ($smd_tabs) {
-            foreach ($smd_tabs as $idx => $tab) {
-                $tablist[$tab['area']][$tab['name']] = $tab['name'];
-                $smd_areas[$tab['area']] = strtolower(sanitizeForUrl($tab['area']));
-
-                if ($tab['name'] == $tab_name) {
-                    $sort_order = $tab['sort_order'];
-                    $area = $tab['area'];
-                    $view_privs = explode(',', $tab['view_privs']);
-                    $curr_page = $tab['page'];
-                    $curr_style = $tab['style'];
-                }
-            }
-        }
-
-        // Default to the current user level's privs for new items
-        if ($tab_name == '') {
-            $view_privs[] = $smd_tabber_uprivs;
-        }
-
-        // Build a select list of tab names, injecting optgroups above any areas
-        $optgroups = (count($tablist) > 1); // Only add optgroups if there are tabs in more than one area
-        $tabSelector = '';
-
-        if ($tablist) {
-            $tabSelector .= '<select name="smd_tabber_name" id="smd_tabber_name" onchange="submit(this.form);">';
-            $tabSelector .= '<option value="">' . gTxt('smd_tabber_new_tab') . '</option>';
-            $lastArea = '';
-            $inGroups = false; // Is set to true when the first area is reached
-
-            foreach ($tablist as $theArea => $theTabs) {
-                if ($optgroups && $lastArea != $theArea) {
-                    $tabSelector .= ($inGroups) ? '</optgroup>' : '';
-                    $tabSelector .= '<optgroup label="'.$theArea.'">';
-                    $inGroups = true;
-            }
-
-            foreach($theTabs as $theTab => $tabName) {
-                $tabSelector .= '<option value="'.$theTab.'"'.(($theTab == $tab_name) ? ' selected="selected"' : '').'>' . $tabName . '</option>';
+                    if ($tab['name'] == $tab_name) {
+                        $sort_order = $tab['sort_order'];
+                        $area = $tab['area'];
+                        $view_privs = explode(',', $tab['view_privs']);
+                        $curr_page = $tab['page'];
+                        $curr_style = $tab['style'];
+                    }
                 }
             }
 
-            $tabSelector .= (($optgroups) ? '</optgroup>' : '') . '</select>';
-        }
+            // Default to the current user level's privs for new items
+            if ($tab_name == '') {
+                $view_privs[] = $this->uprivs;
+            }
 
-        $areas = areas();
-        $areas = array_merge($areas, $smd_areas);
-        $area_list = array('' => gTxt('smd_tabber_new_area'));
+            // Build a select list of tab names, injecting optgroups above any areas
+            $optgroups = (count($tablist) > 1); // Only add optgroups if there are tabs in more than one area
+            $tabSelector = '';
 
-        foreach ($areas as $idx => $alist) {
-            $key = array_search($idx, $smd_areas);
+            if ($tablist) {
+                $tabSelector .= '<select name="smd_tabber_name" id="smd_tabber_name" onchange="submit(this.form);">';
+                $tabSelector .= '<option value="">' . gTxt('smd_tabber_new_tab') . '</option>';
+                $lastArea = '';
+                $inGroups = false; // Is set to true when the first area is reached
 
-            if ($key === false) {
-                $area_list[$idx] = $idx;
+                foreach ($tablist as $theArea => $theTabs) {
+                    if ($optgroups && $lastArea != $theArea) {
+                        $tabSelector .= ($inGroups) ? '</optgroup>' : '';
+                        $tabSelector .= '<optgroup label="'.$theArea.'">';
+                        $inGroups = true;
+                }
+
+                foreach ($theTabs as $theTab => $tabName) {
+                    $tabSelector .= '<option value="'.$theTab.'"'.(($theTab == $tab_name) ? ' selected="selected"' : '').'>' . $tabName . '</option>';
+                    }
+                }
+
+                $tabSelector .= (($optgroups) ? '</optgroup>' : '') . '</select>';
+            }
+
+            $areas = areas();
+            $areas = array_merge($areas, $smd_areas);
+            $area_list = array('' => gTxt('smd_tabber_new_area'));
+
+            foreach ($areas as $idx => $alist) {
+                $key = array_search($idx, $smd_areas);
+
+                if ($key === false) {
+                    $area_list[$idx] = $idx;
+                } else {
+                    $area_list[$key] = $key;
+                }
+            }
+
+            $privs = get_groups();
+            $privsel = $this->tab_multi_select('smd_tabber_view_privs', $privs, $view_privs);
+
+            $pages = safe_column('name', 'txp_page', "name like '".doSlash($tab_prefix)."%'");
+
+            foreach ($pages as $idx => $page) {
+                $pages[$idx] = str_replace($tab_prefix, '', $page);
+            }
+
+            $styles = safe_column('name', 'txp_css', "name like '".doSlash($tab_prefix)."%'");
+
+            foreach ($styles as $idx => $style) {
+                $styles[$idx] = str_replace($tab_prefix, '', $style);
+            }
+
+            $editcell = (($smd_tabs)
+                    ? '<div class="smd_tabber_label">'
+                        . gTxt('smd_tabber_choose')
+                        . '</div><div class="smd_tabber_value">'
+                        . $tabSelector
+                        . (($tab_name != '')
+                            ? sp . eLink(strtolower(sanitizeForUrl($tab_name)), '', '','', gTxt('View'))
+                            : '')
+                        . eInput($this->event)
+                        .'</div>'
+                    : '');
+
+            $pref_link = $pref_rights ? sp . eLink($this->event, 'prefs_ui', '', '', '['.gTxt('smd_tabber_prefs').']') : '';
+
+            if (class_exists('\Textpattern\UI\Style')) {
+                $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['edit']);
             } else {
-                $area_list[$key] = $key;
+                $css = '<style>' . $smd_tabber_styles['edit'] . '</style>';
+            }
+
+            // Edit form
+            echo $css;
+            echo '<div id="smd_tabber_wrapper">';
+            echo hed(gTxt('smd_tabber_heading'), 2);
+            echo '<div class="smd_tabber_preflink">' . $pref_link . '</div>';
+            echo '<form id="smd_tabber_select" action="index.php" method="post">';
+            echo '<div class="smd_tabber_equal">';
+            echo '<div class="smd_tabber_row">' . $editcell . '</div><!-- end row -->';
+            echo '</div></form>';
+
+            echo '<form name="smd_tabber_form" id="smd_tabber_form" action="index.php" method="post">';
+            echo '<div class="smd_tabber_equal">';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_name') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . fInput('text', 'smd_tabber_new_name', $tab_new_name)
+                    . hInput('smd_tabber_name', $tab_name)
+                    . (($tab_name == '')
+                        ? ''
+                        : sp . '<a href="?event='.$this->event .a. 'step=tabdelete' .a. 'smd_tabber_name='.urlencode($tab_name).a.'_txp_token='.form_token().'" class="smallerbox" onclick="return confirm(\''.gTxt('confirm_delete_popup').'\');">[x]</a>'
+                    )
+                    . '</div>'
+                    . '</div><!-- end row -->';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_sort_order') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . fInput('text', 'smd_tabber_sort_order', $sort_order)
+                    . '</div>'
+                    . '</div><!-- end row -->';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_area') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . selectInput('smd_tabber_area', $area_list, $area)
+                    . sp . fInput('text', 'smd_tabber_new_area', '')
+                    . '</div>'
+                    . '</div><!-- end row -->';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_view_privs') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . $privsel
+                    . '</div>'
+                    . '</div><!-- end row -->';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_page') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . selectInput('smd_tabber_page', $pages, $curr_page, true)
+                    . sp . (($curr_page) ? eLink('page', '', 'name', $curr_page, gTxt('edit')) : eLink('page', 'page_new', '', '', gTxt('create')) )
+                    . '</div>'
+                    . '</div><!-- end row -->';
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_style') . '</div>';
+            echo '<div class="smd_tabber_value">'
+                    . selectInput('smd_tabber_style', $styles, $curr_style, true)
+                    . sp. (($curr_style) ? eLink('css', '', 'name', $curr_style, gTxt('edit')) : eLink('css', 'pour', '', '', gTxt('create')) )
+                    . '</div>'
+                    . '</div><!-- end row -->';
+
+            echo '<div class="smd_tabber_row">';
+            echo '<div class="smd_tabber_label">&nbsp;</div>';
+            echo '<div class="smd_tabber_value">'
+                    . fInput('submit', 'submit', gTxt('save'), 'smd_tabber_save publish')
+                    . eInput($this->event)
+                    . sInput('tabsave')
+                    . tInput()
+                    . '</div>'
+                    . '</div><!-- end row -->';
+
+            echo '</div><!-- end smd_tabber_equal -->';
+            echo '</form>';
+            echo '</div><!-- end smd_tabber_wrapper -->';
+        } else {
+            // Table not installed
+            $btnInstall = '<form method="post" action="?event='.$this->event.a.'step=install" style="display:inline">'.fInput('submit', 'submit', gTxt('smd_tabber_tbl_install_lbl'), 'smallerbox').'</form>';
+            $btnStyle = ' style="border:0;height:25px"';
+            echo startTable('list');
+            echo tr(tda(strong(gTxt('smd_tabber_prefs_some_tbl')).br.br
+                    .gTxt('smd_tabber_prefs_some_explain').br.br
+                    .gTxt('smd_tabber_prefs_some_opts'), ' colspan="2"')
+            );
+            echo tr(tda($btnInstall, $btnStyle));
+            echo endTable();
+        }
+    }
+
+    /**
+     * Save/insert the tab info
+     *
+     * @return string  HTML
+     */
+    public function tabsave()
+    {
+        extract(doSlash(gpsa(array(
+            'smd_tabber_name',
+            'smd_tabber_new_name',
+            'smd_tabber_area',
+            'smd_tabber_new_area',
+            'smd_tabber_page',
+            'smd_tabber_style',
+            'smd_tabber_sort_order',
+        ))));
+
+        $vu = gps('smd_tabber_view_privs');
+        $smd_tabber_view_privs = $vu ? doSlash(join(',', $vu)) : '';
+
+        $theArea = ($smd_tabber_new_area == '') ? $smd_tabber_area : $smd_tabber_new_area;
+
+        if ($smd_tabber_new_name == '') {
+            $this->message = array(gTxt('smd_tabber_need_name'), E_WARNING);
+        } else {
+            if ($theArea == '') {
+                $this->message = array(gTxt('smd_tabber_need_area'), E_WARNING);
+            } else {
+                $exists = safe_field('name', SMD_TABBER, "name='$smd_tabber_new_name'");
+                $same = ($smd_tabber_name != $smd_tabber_new_name) && $exists;
+
+                if ($same == false) {
+                    $_POST['smd_tabber_name'] = $smd_tabber_new_name;
+
+                    if ($smd_tabber_name == '') {
+                        safe_insert(SMD_TABBER, "name='$smd_tabber_new_name', sort_order='$smd_tabber_sort_order', area='".doSlash($theArea)."', page='$smd_tabber_page', style='$smd_tabber_style', view_privs='$smd_tabber_view_privs'");
+                        $this->message = gTxt('smd_tabber_created');
+                    } else {
+                        safe_update(SMD_TABBER, "name='$smd_tabber_new_name', sort_order='$smd_tabber_sort_order', area='".doSlash($theArea)."', page='$smd_tabber_page', style='$smd_tabber_style', view_privs='$smd_tabber_view_privs'", "name='$smd_tabber_name'");
+                        $this->message = gTxt('smd_tabber_saved');
+                    }
+                } else {
+                    $this->message = array(gTxt('smd_tabber_exists'), E_WARNING);
+                }
             }
         }
 
-        $privs = get_groups();
-        $privsel = smd_tabber_multi_select('smd_tabber_view_privs', $privs, $view_privs);
+        $this->tabber_ui();
+    }
 
-        $pages = safe_column('name', 'txp_page', "name like '".doSlash($tab_prefix)."%'");
+    /**
+     * Delete the passed tab info
+     *
+     * @return string  HTML
+     */
+    public function tabdelete()
+    {
+        $name = doSlash(gps('smd_tabber_name'));
 
-        foreach ($pages as $idx => $page) {
-            $pages[$idx] = str_replace($tab_prefix, '', $page);
+        $ret = safe_delete(SMD_TABBER, "name='$name'");
+        $this->message = gTxt('smd_tabber_deleted');
+
+        $_GET['smd_tabber_name'] = '';
+
+        $this->tabber_ui();
+    }
+
+    /**
+     * Render the tab management prefs panel
+     *
+     * @return string  HTML
+     */
+    public function prefs_ui()
+    {
+        pagetop(gTxt('smd_tabber_prefs_lbl'), $this->message);
+
+        $smd_tabber_styles = $this->get_styles();
+
+        $users = safe_rows('*', 'txp_users', '1=1 ORDER BY RealName');
+        $privs = array('' => gTxt('smd_tabber_all_pubs'));
+
+        foreach ($users as $idx => $user) {
+            $privs[$user['name']] = $user['RealName'];
         }
 
-        $styles = safe_column('name', 'txp_css', "name like '".doSlash($tab_prefix)."%'");
-
-        foreach ($styles as $idx => $style) {
-            $styles[$idx] = str_replace($tab_prefix, '', $style);
-        }
-
-        $editcell = (($smd_tabs)
-                ? '<div class="smd_tabber_label">'
-                    . gTxt('smd_tabber_choose')
-                    . '</div><div class="smd_tabber_value">'
-                    . $tabSelector
-                    . (($tab_name != '')
-                        ? sp . eLink(strtolower(sanitizeForUrl($tab_name)), '', '','', gTxt('View'))
-                        : '')
-                    . eInput($smd_tabber_event)
-                    .'</div>'
-                : '');
-
-        $pref_link = $pref_rights ? sp . eLink($smd_tabber_event, 'smd_tabber_prefs', '', '', '['.gTxt('smd_tabber_prefs').']') : '';
+        $curr_privs = explode(',', get_pref('smd_tabber_tab_privs', ''));
+        $parse_depth = get_pref('smd_tabber_parse_depth', '1');
+        $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_');
 
         if (class_exists('\Textpattern\UI\Style')) {
-            $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['edit']);
+            $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['prefs']);
         } else {
-            $css = '<style>' . $smd_tabber_styles['edit'] . '</style>';
+            $css = '<style>' . $smd_tabber_styles['prefs'] . '</style>';
         }
 
-        // Edit form
         echo $css;
-        echo '<div id="smd_tabber_wrapper">';
-        echo hed(gTxt('smd_tabber_heading'), 2);
-        echo '<div class="smd_tabber_preflink">' . $pref_link . '</div>';
-        echo '<form id="smd_tabber_select" action="index.php" method="post">';
-        echo '<div class="smd_tabber_equal">';
-        echo '<div class="smd_tabber_row">' . $editcell . '</div><!-- end row -->';
-        echo '</div></form>';
-
-        echo '<form name="smd_tabber_form" id="smd_tabber_form" action="index.php" method="post">';
-        echo '<div class="smd_tabber_equal">';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_name') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . fInput('text', 'smd_tabber_new_name', $tab_new_name)
-                . hInput('smd_tabber_name', $tab_name)
-                . (($tab_name == '')
-                    ? ''
-                    : sp . '<a href="?event='.$smd_tabber_event. a.'step=smd_tabber_delete' . a . 'smd_tabber_name='.urlencode($tab_name).'" class="smallerbox" onclick="return confirm(\''.gTxt('confirm_delete_popup').'\');">[x]</a>'
-                )
-                . '</div>'
-                . '</div><!-- end row -->';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_sort_order') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . fInput('text', 'smd_tabber_sort_order', $sort_order)
-                . '</div>'
-                . '</div><!-- end row -->';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_area') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . selectInput('smd_tabber_area', $area_list, $area)
-                . sp . fInput('text', 'smd_tabber_new_area', '')
-                . '</div>'
-                . '</div><!-- end row -->';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_view_privs') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . $privsel
-                . '</div>'
-                . '</div><!-- end row -->';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_page') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . selectInput('smd_tabber_page', $pages, $curr_page, true)
-                . sp . (($curr_page) ? eLink('page', '', 'name', $curr_page, gTxt('edit')) : eLink('page', 'page_new', '', '', gTxt('create')) )
-                . '</div>'
-                . '</div><!-- end row -->';
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">' . gTxt('smd_tabber_style') . '</div>';
-        echo '<div class="smd_tabber_value">'
-                . selectInput('smd_tabber_style', $styles, $curr_style, true)
-                . sp. (($curr_style) ? eLink('css', '', 'name', $curr_style, gTxt('edit')) : eLink('css', 'pour', '', '', gTxt('create')) )
-                . '</div>'
-                . '</div><!-- end row -->';
-
-        echo '<div class="smd_tabber_row">';
-        echo '<div class="smd_tabber_label">&nbsp;</div>';
-        echo '<div class="smd_tabber_value">'
-                . fInput('submit', 'submit', gTxt('save'), 'smd_tabber_save publish')
-                . eInput($smd_tabber_event)
-                . sInput('smd_tabber_save')
-                . '</div>'
-                . '</div><!-- end row -->';
-
-        echo '</div><!-- end smd_tabber_equal -->';
-        echo '</form>';
-        echo '</div><!-- end smd_tabber_wrapper -->';
-    } else {
-        // Table not installed
-        $btnInstall = '<form method="post" action="?event='.$smd_tabber_event.a.'step=smd_tabber_table_install" style="display:inline">'.fInput('submit', 'submit', gTxt('smd_tabber_tbl_install_lbl'), 'smallerbox').'</form>';
-        $btnStyle = ' style="border:0;height:25px"';
+        echo '<form action="index.php" method="post" name="smd_tabber_prefs_form">';
         echo startTable('list');
-        echo tr(tda(strong(gTxt('smd_tabber_prefs_some_tbl')).br.br
-                .gTxt('smd_tabber_prefs_some_explain').br.br
-                .gTxt('smd_tabber_prefs_some_opts'), ' colspan="2"')
+        echo tr(tda(hed(gTxt('smd_tabber_prefs_lbl'), 2), ' colspan="3"'));
+        echo tr(
+            tda(gTxt('smd_tabber_tab_privs'), ' class="smd_label"')
+            . tda($this->tab_multi_select('smd_tabber_tab_privs', $privs, $curr_privs, 10))
         );
-        echo tr(tda($btnInstall, $btnStyle));
+        echo tr(
+            tda(gTxt('smd_tabber_tab_prefix'), ' class="smd_label"')
+            . tda(fInput('text', 'smd_tabber_tab_prefix', $tab_prefix))
+        );
+        echo tr(
+            tda(gTxt('smd_tabber_parse_depth'), ' class="smd_label"')
+            . tda(fInput('text', 'smd_tabber_parse_depth', $parse_depth))
+        );
+        echo tr(tda(eLink($this->event, '', '', '', gTxt('smd_tabber_cancel')), ' class="noline"') . tda(fInput('submit', '', gTxt('save'), 'publish'). eInput($this->event).sInput('tab_prefsave').tInput(), ' class="noline"'));
         echo endTable();
+        echo '</form>';
     }
-}
 
-// ------------------------
-function smd_tabber_save() {
-    extract(doSlash(gpsa(array(
-        'smd_tabber_name',
-        'smd_tabber_new_name',
-        'smd_tabber_area',
-        'smd_tabber_new_area',
-        'smd_tabber_page',
-        'smd_tabber_style',
-        'smd_tabber_sort_order',
-    ))));
+    /**
+     * Save the plugin prefs
+     *
+     * @return string  HTML
+     */
+    public function tab_prefsave()
+    {
+        $depth = intval(gps('smd_tabber_parse_depth'));
+        $prefix = gps('smd_tabber_tab_prefix');
+        $items = gps('smd_tabber_tab_privs');
+        $privs = ($items) ? join(',', $items) : '';
+        set_pref('smd_tabber_tab_privs', $privs, 'smd_tabber', PREF_HIDDEN, 'text_input');
+        set_pref('smd_tabber_tab_prefix', $prefix, 'smd_tabber', PREF_HIDDEN, 'text_input');
+        set_pref('smd_tabber_parse_depth', $depth, 'smd_tabber', PREF_HIDDEN, 'text_input');
 
-    $vu = gps('smd_tabber_view_privs');
-    $smd_tabber_view_privs = $vu ? doSlash(join(',', $vu)) : '';
+        $this->message = gTxt('preferences_saved');
+        $this->tabber_ui();
+    }
 
-    $msg = '';
-    $theArea = ($smd_tabber_new_area == '') ? $smd_tabber_area : $smd_tabber_new_area;
+    /**
+     * Render a multi-select widget with the given items
+     *
+     * @param  string $name  Select name
+     * @param  array  $items The select option name-value pairs
+     * @param  array  $sel   The selected item(s)
+     * @param  string $size  How many rows to display
+     * @todo   Use the UI library for this
+     * @return string        HTML
+     */
+    protected function tab_multi_select($name, $items, $sel = array(), $size = '7')
+    {
+        $out = '<select name="'.$name.'[]" multiple="multiple" size="'.$size.'">'.n;
 
-    if ($smd_tabber_new_name == '') {
-        $msg = array(gTxt('smd_tabber_need_name'), E_WARNING);
-    } else {
-        if ($theArea == '') {
-            $msg = array(gTxt('smd_tabber_need_area'), E_WARNING);
-        } else {
-            $exists = safe_field('name', SMD_TABBER, "name='$smd_tabber_new_name'");
-            $same = ($smd_tabber_name != $smd_tabber_new_name) && $exists;
-
-            if ($same == false) {
-                $_POST['smd_tabber_name'] = $smd_tabber_new_name;
-
-                if ($smd_tabber_name == '') {
-                    safe_insert(SMD_TABBER, "name='$smd_tabber_new_name', sort_order='$smd_tabber_sort_order', area='".doSlash($theArea)."', page='$smd_tabber_page', style='$smd_tabber_style', view_privs='$smd_tabber_view_privs'");
-                    $msg = gTxt('smd_tabber_created');
-                } else {
-                    safe_update(SMD_TABBER, "name='$smd_tabber_new_name', sort_order='$smd_tabber_sort_order', area='".doSlash($theArea)."', page='$smd_tabber_page', style='$smd_tabber_style', view_privs='$smd_tabber_view_privs'", "name='$smd_tabber_name'");
-                    $msg = gTxt('smd_tabber_saved');
-                }
-            } else {
-                $msg = array(gTxt('smd_tabber_exists'), E_WARNING);
-            }
+        foreach ($items as $idx => $item) {
+            $out .= '<option value="'.$idx.'"'.((in_array($idx, $sel)) ? ' selected="selected"' : '').'>'.$item.'</option>'.n;
         }
+
+        $out .= '</select>'.n;
+
+        return $out;
     }
 
-    smd_tabber($msg);
-}
+    /**
+     * Add tabber table if not already installed and handle upgrades
+     */
+    public function install()
+    {
+        safe_create('smd_tabber', "
+            name         VARCHAR(32) NOT NULL DEFAULT '',
+            sort_order   VARCHAR(32)     NULL DEFAULT '',
+            area         VARCHAR(32)     NULL DEFAULT '',
+            view_privs   VARCHAR(32) NOT NULL DEFAULT '',
+            page         VARCHAR(32)     NULL DEFAULT '',
+            style        VARCHAR(32)     NULL DEFAULT '',
 
-// ------------------------
-function smd_tabber_delete() {
-    global $smd_tabber_event;
-
-    $name = doSlash(gps('smd_tabber_name'));
-
-    $ret = safe_delete(SMD_TABBER, "name='$name'");
-    $msg = gTxt('smd_tabber_deleted');
-
-    $_GET['smd_tabber_name'] = '';
-
-    smd_tabber($msg);
-}
-
-// ------------------------
-function smd_tabber_prefs($msg='') {
-    global $smd_tabber_event;
-
-    pagetop(gTxt('smd_tabber_prefs_lbl'), $msg);
-
-    $smd_tabber_styles = smd_tabber_get_styles();
-
-    $users = safe_rows('*', 'txp_users', '1=1 ORDER BY RealName');
-    $privs = array('' => gTxt('smd_tabber_all_pubs'));
-
-    foreach ($users as $idx => $user) {
-        $privs[$user['name']] = $user['RealName'];
+            PRIMARY KEY (`name`)
+        ");
     }
 
-    $curr_privs = explode(',', get_pref('smd_tabber_tab_privs', ''));
-    $parse_depth = get_pref('smd_tabber_parse_depth', '1');
-    $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_');
-
-    if (class_exists('\Textpattern\UI\Style')) {
-        $css = Txp::get('\Textpattern\UI\Style')->setContent($smd_tabber_styles['prefs']);
-    } else {
-        $css = '<style>' . $smd_tabber_styles['prefs'] . '</style>';
+    /**
+     * Drop table if in database and tidy up
+     *
+     * @todo remove plugin textpack strings
+     */
+    public function uninstall()
+    {
+        safe_drop('smd_tabber');
     }
 
-    echo $css;
-    echo '<form action="index.php" method="post" name="smd_tabber_prefs_form">';
-    echo startTable('list');
-    echo tr(tda(hed(gTxt('smd_tabber_prefs_lbl'), 2), ' colspan="3"'));
-    echo tr(
-        tda(gTxt('smd_tabber_tab_privs'), ' class="smd_label"')
-        . tda(smd_tabber_multi_select('smd_tabber_tab_privs', $privs, $curr_privs, 10))
-    );
-    echo tr(
-        tda(gTxt('smd_tabber_tab_prefix'), ' class="smd_label"')
-        . tda(fInput('text', 'smd_tabber_tab_prefix', $tab_prefix))
-    );
-    echo tr(
-        tda(gTxt('smd_tabber_parse_depth'), ' class="smd_label"')
-        . tda(fInput('text', 'smd_tabber_parse_depth', $parse_depth))
-    );
-    echo tr(tda(eLink($smd_tabber_event, '', '', '', gTxt('smd_tabber_cancel')), ' class="noline"') . tda(fInput('submit', '', gTxt('save'), 'publish'). eInput($smd_tabber_event).sInput('smd_tabber_prefsave'), ' class="noline"'));
-    echo endTable();
-    echo '</form>';
-}
-
-// ------------------------
-function smd_tabber_prefsave() {
-    $depth = intval(gps('smd_tabber_parse_depth'));
-    $prefix = gps('smd_tabber_tab_prefix');
-    $items = gps('smd_tabber_tab_privs');
-    $privs = ($items) ? join(',', $items) : '';
-    set_pref('smd_tabber_tab_privs', $privs, 'smd_tabber', PREF_HIDDEN, 'text_input');
-    set_pref('smd_tabber_tab_prefix', $prefix, 'smd_tabber', PREF_HIDDEN, 'text_input');
-    set_pref('smd_tabber_parse_depth', $depth, 'smd_tabber', PREF_HIDDEN, 'text_input');
-
-    $msg = gTxt('preferences_saved');
-    smd_tabber($msg);
-}
-
-// ------------------------
-function smd_tabber_multi_select($name, $items, $sel=array(), $size='7') {
-    $out = '<select name="'.$name.'[]" multiple="multiple" size="'.$size.'">'.n;
-
-    foreach ($items as $idx => $item) {
-        $out .= '<option value="'.$idx.'"'.((in_array($idx, $sel)) ? ' selected="selected"' : '').'>'.$item.'</option>'.n;
-    }
-
-    $out .= '</select>'.n;
-
-    return $out;
-}
-
-// ------------------------
-// Add tabber table if not already installed
-function smd_tabber_table_install() {
-    safe_create('smd_tabber', "
-        name         VARCHAR(32) NOT NULL DEFAULT '',
-        sort_order   VARCHAR(32)     NULL DEFAULT '',
-        area         VARCHAR(32)     NULL DEFAULT '',
-        view_privs   VARCHAR(32) NOT NULL DEFAULT '',
-        page         VARCHAR(32)     NULL DEFAULT '',
-        style        VARCHAR(32)     NULL DEFAULT '',
-
-        PRIMARY KEY (`name`)
-    ");
-}
-
-// ------------------------
-// Drop table if in database
-function smd_tabber_table_remove() {
-    safe_drop('smd_tabber');
-}
-
-// ------------------------
-function smd_tabber_table_exist($all='') {
-    if (function_exists('safe_exists')) {
-        if (safe_exists('smd_tabber')) {
-            return true;
-        };
-    } else {
-        if ($all) {
-            $tbls = array(SMD_TABBER => 6);
-            $out = count($tbls);
-            foreach ($tbls as $tbl => $cols) {
-                if (gps('debug')) {
-                    echo "++ TABLE ".$tbl." HAS ".count(safe_show('columns', $tbl))." COLUMNS; REQUIRES ".$cols." ++".br;
-                }
-
-                if (count(safe_show('columns', $tbl)) == $cols) {
-                    $out--;
-                }
-            }
-
-            return ($out===0) ? 1 : 0;
+    /**
+     * Check if the plugin's table exists and is complete.
+     * @param  string $all [description]
+     * @return [type]      [description]
+     */
+    public function table_exist($all = '')
+    {
+        if (function_exists('safe_exists')) {
+            if (safe_exists('smd_tabber')) {
+                return true;
+            };
         } else {
-            if (gps('debug')) {
-                echo "++ TABLE ".SMD_TABBER." HAS ".count(safe_show('columns', SMD_tabber))." COLUMNS;";
-            }
+            if ($all) {
+                $tbls = array(SMD_TABBER => 6);
+                $out = count($tbls);
 
-            return(safe_show('columns', SMD_TABBER));
+                foreach ($tbls as $tbl => $cols) {
+                    if (gps('debug')) {
+                        echo "++ TABLE ".$tbl." HAS ".count(safe_show('columns', $tbl))." COLUMNS; REQUIRES ".$cols." ++".br;
+                    }
+
+                    if (count(safe_show('columns', $tbl)) == $cols) {
+                        $out--;
+                    }
+                }
+
+                return ($out===0) ? 1 : 0;
+            } else {
+                if (gps('debug')) {
+                    echo "++ TABLE ".SMD_TABBER." HAS ".count(safe_show('columns', SMD_tabber))." COLUMNS;";
+                }
+
+                return(safe_show('columns', SMD_TABBER));
+            }
         }
     }
 }
@@ -667,7 +814,7 @@ function smd_tabber_table_exist($all='') {
  * @return string      HTML link
  */
 function smd_tabber_edit_page($atts) {
-	return smd_tabber_edit($atts, 'page');
+    return smd_tabber_edit($atts, 'page');
 }
 
 /**
@@ -679,7 +826,7 @@ function smd_tabber_edit_page($atts) {
  * @return string      HTML link
  */
 function smd_tabber_edit_style($atts) {
-	return smd_tabber_edit($atts, 'style');
+    return smd_tabber_edit($atts, 'style');
 }
 
 /**
