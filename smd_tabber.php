@@ -99,6 +99,12 @@ if (!defined('SMD_TABBER')) {
     define("SMD_TABBER", 'smd_tabber');
 }
 
+if (class_exists('\Textpattern\Tag\Registry')) {
+    Txp::get('\Textpattern\Tag\Registry')
+        ->register('smd_tabber_edit_page')
+        ->register('smd_tabber_edit_style');
+}
+
 if (txpinterface === 'admin') {
     global $textarray, $smd_tabber_event, $smd_tabber_styles, $txp_user, $smd_tabber_callstack, $smd_tabber_uprivs, $smd_tabber_prevs;
 
@@ -620,75 +626,77 @@ function smd_tabber_table_exist($all='') {
 // ***********
 // PUBLIC TAGS
 // ***********
-// ------------------------
-function smd_tabber_edit_page($atts, $thing=NULL) {
+
+/**
+ * Public tag for making a link to edit the Page content associated with the current tab
+ *
+ * Stub function.
+ *
+ * @param  array $atts Tag attributes
+ * @return string      HTML link
+ */
+function smd_tabber_edit_page($atts) {
+	return smd_tabber_edit($atts, 'page');
+}
+
+/**
+ * Public tag for making a link to edit the Stylesheet content associated with the current tab
+ *
+ * Stub function.
+ *
+ * @param  array $atts Tag attributes
+ * @return string      HTML link
+ */
+function smd_tabber_edit_style($atts) {
+	return smd_tabber_edit($atts, 'style');
+}
+
+/**
+ * Create a link to edit the Page/CSS content associated with the current tab
+ *
+ * @param  array  $atts Tag attributes
+ * @param  string $type Type of content to link to ('page' or 'style')
+ * @return string       HTML link
+ */
+
+function smd_tabber_edit($atts, $type) {
     global $smd_tabber_callstack, $event;
+
+    $friendlyName = ($type === 'style') ? 'CSS' : $type;
 
     extract(lAtts(array(
         'name'    => $event,
-        'title'   => 'Edit page',
+        'title'   => 'Edit '.$friendlyName,
         'class'   => '',
         'html_id' => '',
         'wraptag' => '',
-    ),$atts));
+    ), $atts));
 
     $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_');
 
     if (isset($atts['name'])) {
-        $page = (strpos($name, $tab_prefix) !== false) ? $name : $tab_prefix.$name;
+        $item = (strpos($name, $tab_prefix) !== false) ? $name : $tab_prefix.$name;
     } else {
-        // Lookup the name of the page
+        // Lookup the name in use
         $ev = (strpos($name, $tab_prefix) !== false) ? str_replace($tab_prefix, '', $name) : $name;
-        $page = (isset($smd_tabber_callstack[$ev])) ? $smd_tabber_callstack[$ev]['page'] : '';
+        $item = (isset($smd_tabber_callstack[$ev])) ? $smd_tabber_callstack[$ev][$type] : '';
     }
 
     $idx = 'name';
     $step = '';
 
-    if (!$page) {
-        $page = $idx = '';
-        $step = 'page_new';
+    if (!$item) {
+        $item = $idx = '';
+        $step = ($type === 'page' ? 'page_new' : 'pour');
     }
 
-    $lnk = eLink('page', $step, $idx, $page, $title);
+    $endpoint = ($type === 'style') ? 'css' : 'page';
+
+    $lnk = eLink($endpoint, $step, $idx, $item, $title);
 
     return ($wraptag) ? doTag($lnk, $wraptag, $class, '', $html_id) : $lnk;
 }
 
-// ------------------------
-function smd_tabber_edit_style($atts, $thing=NULL) {
-    global $smd_tabber_callstack, $event;
-
-    extract(lAtts(array(
-        'name'    => $event,
-        'title'   => 'Edit CSS',
-        'class'   => '',
-        'html_id' => '',
-        'wraptag' => '',
-    ),$atts));
-
-    $tab_prefix = get_pref('smd_tabber_tab_prefix', 'tabber_');
-
-    if (isset($atts['name'])) {
-        $css = (strpos($name, $tab_prefix) !== false) ? $name : $tab_prefix.$name;
-    } else {
-        // Lookup the name of the stylesheet
-        $ev = (strpos($name, $tab_prefix) !== false) ? str_replace($tab_prefix, '', $name) : $name;
-        $css = (isset($smd_tabber_callstack[$ev])) ? $smd_tabber_callstack[$ev]['style'] : '';
-    }
-
-    $idx = 'name';
-    $step = '';
-
-    if (!$css) {
-        $css = $idx = '';
-        $step = 'pour';
-    }
-
-    $lnk = eLink('css', $step, $idx, $css, $title);
-
-    return ($wraptag) ? doTag($lnk, $wraptag, $class, '', $html_id) : $lnk;
-}
 # --- END PLUGIN CODE ---
 if (0) {
 ?>
@@ -696,7 +704,7 @@ if (0) {
 # --- BEGIN PLUGIN HELP ---
 h1(#smd_tabber_top). smd_tabber
 
-Create and manage your own TXP tabs/sub-tabs, populating them with any content you wish for your users. Content and CSS are controlled by regular Textpattern Pages/Stylesheets. Acts like a multi-user, multi-tab dashboard for your admin-side users.
+Create and manage your own Textpattern back-end tabs/sub-tabs, populating them with any content you wish for your users. Content and CSS are controlled by regular Textpattern Pages/Stylesheets. Acts like a multi-user, multi-tab dashboard for your admin-side users.
 
 h2(#smd_tabber_feat). Features:
 

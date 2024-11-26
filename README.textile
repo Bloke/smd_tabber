@@ -1,6 +1,6 @@
 h1(#smd_tabber_top). smd_tabber
 
-Create and manage your own TXP tabs/sub-tabs, populating them with any content you wish for your users. Content and CSS are controlled by regular Textpattern Pages/Stylesheets. Acts like a multi-user, multi-tab dashboard for your admin-side users.
+Create and manage your own Textpattern back-end tabs/sub-tabs, populating them with any content you wish for your users. Content and CSS are controlled by regular Textpattern Pages/Stylesheets. Acts like a multi-user, multi-tab dashboard for your admin-side users.
 
 h2(#smd_tabber_feat). Features:
 

@@ -1,5 +1,10 @@
 h1. Changelog
 
+h2. 0.2.0 - 2024-11-26
+
+* Updated code for a smaller global footprint
+* Fixed table installation bug (thanks, jools-r)
+
 h2. 0.1.1 - 2011-03-31
 
 * Imported @$pretext@ to prevent warnings when using article tags (thanks redbot)
